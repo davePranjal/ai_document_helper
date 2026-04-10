@@ -109,17 +109,17 @@ See [`AI_USAGE.md`](AI_USAGE.md) for the full prompt-engineering and AI-design r
 
 ### Prerequisites
 - Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (fast Python package manager)
 - Docker & Docker Compose (for Postgres + Redis)
 - An Anthropic API key
 
 ### Steps
 
 ```bash
-# 1. Install
+# 1. Clone and install dependencies
 git clone <repo-url>
 cd ai_document_helper
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+uv sync --dev
 
 # 2. Configure
 cp .env.example .env
@@ -129,16 +129,21 @@ cp .env.example .env
 docker compose up -d
 
 # 4. Run migrations
-alembic upgrade head
+uv run alembic upgrade head
 
 # 5. Start the API
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 
 # 6. Start the Celery worker (separate terminal)
-celery -A app.tasks worker --loglevel=info --pool=threads --concurrency=4
+uv run celery -A app.tasks worker --loglevel=info --pool=threads --concurrency=4
+
+# 7. (Optional) Start Flower — Celery monitoring dashboard (separate terminal)
+uv run celery -A app.tasks flower --port=5555 --broker=redis://localhost:6379/1
 ```
 
 > **Note:** the worker uses `--pool=threads` because PyTorch + macOS Metal + Celery's prefork pool crashes on `fork()`. The threads pool is safe everywhere.
+>
+> **Alternative (pip):** if you prefer pip over uv, use `python -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` for step 1, then run commands without `uv run`.
 
 ### Open the app
 
@@ -147,6 +152,7 @@ celery -A app.tasks worker --loglevel=info --pool=threads --concurrency=4
 | **Web UI** | http://localhost:8000/ui/ |
 | Swagger | http://localhost:8000/docs |
 | Health | http://localhost:8000/health/ready |
+| Flower (Celery dashboard) | http://localhost:5555 |
 
 ---
 
