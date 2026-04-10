@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Document Vault</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f5f5f7;
+    color: #1d1d1f;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: #1d1d1f;
+    color: white;
+    padding: 12px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .status { font-size: 12px; opacity: 0.7; }
+  .layout {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    overflow: hidden;
+  }
+  .sidebar {
+    background: white;
+    border-right: 1px solid #e0e0e0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  .sidebar-header h2 {
+    font-size: 14px;
+    text-transform: uppercase;
+    color: #666;
+    margin-bottom: 12px;
+    letter-spacing: 0.5px;
+  }
+  .upload-area {
+    position: relative;
+    display: block;
+    border: 2px dashed #c7c7cc;
+    border-radius: 12px;
+    padding: 22px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    background: linear-gradient(180deg, #fafbff 0%, #f4f6fb 100%);
+  }
+  .upload-area:hover {
+    border-color: #007aff;
+    background: linear-gradient(180deg, #eef5ff 0%, #e3edff 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,122,255,0.12);
+  }
+  .upload-area.dragover {
+    border-color: #007aff;
+    border-style: solid;
+    background: #dbeaff;
+    transform: scale(1.01);
+  }
+  .upload-area.uploading { cursor: progress; opacity: 0.85; }
+  .upload-icon {
+    width: 40px;
+    height: 40px;
+    margin: 0 auto 8px;
+    border-radius: 50%;
+    background: #007aff;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 300;
+    box-shadow: 0 2px 6px rgba(0,122,255,0.3);
+    transition: transform 0.2s;
+  }
+  .upload-area:hover .upload-icon { transform: translateY(-2px) scale(1.05); }
+  .upload-title { font-size: 14px; font-weight: 600; color: #1d1d1f; margin-bottom: 2px; }
+  .upload-hint { font-size: 11px; color: #86868b; }
+  .upload-area input { display: none; }
+  .upload-progress {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 3px;
+    background: #007aff;
+    border-radius: 0 0 10px 10px;
+    transform-origin: left;
+    animation: upload-bar 1.2s ease-in-out infinite;
+    display: none;
+  }
+  .upload-area.uploading .upload-progress { display: block; }
+  @keyframes upload-bar {
+    0%   { transform: scaleX(0); }
+    50%  { transform: scaleX(0.7); }
+    100% { transform: scaleX(1); }
+  }
+  .doc-list { flex: 1; overflow-y: auto; }
+  .doc-item {
+    padding: 12px 16px;
+    border-bottom: 1px solid #f0f0f0;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .doc-item:hover { background: #f8f8fa; }
+  .doc-item.selected { background: #e8f0ff; border-left: 3px solid #007aff; }
+  .doc-name {
+    font-size: 13px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .doc-meta {
+    font-size: 11px;
+    color: #888;
+    margin-top: 4px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .status-badge {
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .status-pending { background: #fff3cd; color: #856404; }
+  .status-processing { background: #cce5ff; color: #004085; }
+  .status-completed { background: #d4edda; color: #155724; }
+  .status-failed { background: #f8d7da; color: #721c24; }
+  .main-panel {
+    overflow-y: auto;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .tabs {
+    display: flex;
+    background: white;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 0 24px;
+  }
+  .tab {
+    padding: 14px 20px;
+    cursor: pointer;
+    font-size: 14px;
+    color: #666;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .tab:hover { color: #1d1d1f; }
+  .tab.active { color: #007aff; border-bottom-color: #007aff; font-weight: 600; }
+  .tab-content { padding: 24px; flex: 1; overflow-y: auto; display: none; }
+  .tab-content.active { display: block; }
+  .tab-content.chat-active { display: flex; flex-direction: column; }
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #888;
+  }
+  .empty-state h3 { font-size: 18px; margin-bottom: 8px; color: #555; }
+  .insight-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: 1fr;
+  }
+  .card {
+    background: white;
+    border-radius: 8px;
+    padding: 16px 20px;
+    border: 1px solid #e8e8e8;
+  }
+  .card h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
+  }
+  .card p { font-size: 14px; line-height: 1.5; }
+  .tag {
+    display: inline-block;
+    background: #f0f0f5;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    margin: 2px 4px 2px 0;
+    color: #555;
+  }
+  .tag.topic { background: #e0f0ff; color: #0055cc; }
+  .tag.entity { background: #f0e8ff; color: #5500cc; }
+  .meta-row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: #666;
+  }
+  .meta-row span strong { color: #333; }
+  button {
+    background: #007aff;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: background 0.15s;
+  }
+  button:hover { background: #0055cc; }
+  button:disabled { background: #c7c7cc; cursor: not-allowed; }
+  button.secondary { background: #f0f0f5; color: #1d1d1f; }
+  button.secondary:hover { background: #e0e0e8; }
+
+  /* Chat */
+  .chat-container { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+  .message {
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    border-radius: 12px;
+    max-width: 85%;
+    line-height: 1.5;
+    font-size: 14px;
+  }
+  .message.user {
+    background: #007aff;
+    color: white;
+    margin-left: auto;
+    border-bottom-right-radius: 4px;
+  }
+  .message.assistant {
+    background: white;
+    border: 1px solid #e8e8e8;
+    border-bottom-left-radius: 4px;
+  }
+  .message.assistant .citations {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #f0f0f0;
+    font-size: 12px;
+  }
+  .message.assistant .citations h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 6px;
+  }
+  .citation {
+    background: #fafafa;
+    padding: 6px 10px;
+    border-left: 2px solid #007aff;
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: #555;
+    border-radius: 3px;
+  }
+  .citation small { color: #888; display: block; margin-top: 2px; }
+  .followups {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #f0f0f0;
+  }
+  .followups h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 6px;
+  }
+  .followup-btn {
+    display: inline-block;
+    background: #f0f7ff;
+    color: #007aff;
+    padding: 6px 12px;
+    border-radius: 14px;
+    font-size: 12px;
+    margin: 3px 4px 3px 0;
+    cursor: pointer;
+    border: 1px solid #d0e4ff;
+  }
+  .followup-btn:hover { background: #e0f0ff; }
+  .chat-input {
+    display: flex;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid #e8e8e8;
+  }
+  .chat-input input {
+    flex: 1;
+    padding: 10px 14px;
+    border: 1px solid #d0d0d5;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .chat-input input:focus { outline: none; border-color: #007aff; }
+  .stream-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 8px;
+  }
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: #1d1d1f;
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    opacity: 0;
+    transition: opacity 0.3s;
+    z-index: 100;
+  }
+  .toast.show { opacity: 1; }
+  .toast.error { background: #c41e3a; }
+  .compare-list {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .compare-doc {
+    padding: 10px 14px;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+  }
+  .compare-doc input { width: 16px; height: 16px; }
+  .loading { text-align: center; padding: 40px; color: #888; }
+  .spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #e0e0e0;
+    border-top-color: #007aff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  pre { white-space: pre-wrap; word-wrap: break-word; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AI Document Vault</h1>
+  <div class="status" id="health-status">checking…</div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h2>Documents</h2>
+      <label class="upload-area" id="upload-area">
+        <div class="upload-icon">↑</div>
+        <div class="upload-title" id="upload-title">Upload a document</div>
+        <div class="upload-hint" id="upload-hint">Click or drop a file here · PDF, DOCX, TXT · 50&nbsp;MB max</div>
+        <input type="file" id="file-input" accept=".pdf,.docx,.txt">
+        <div class="upload-progress"></div>
+      </label>
+    </div>
+    <div class="doc-list" id="doc-list">
+      <div class="loading">Loading…</div>
+    </div>
+  </aside>
+
+  <main class="main-panel">
+    <div class="tabs">
+      <div class="tab active" data-tab="insights">Insights</div>
+      <div class="tab" data-tab="chat">Chat</div>
+      <div class="tab" data-tab="compare">Compare</div>
+      <div class="tab" data-tab="metrics">Metrics</div>
+    </div>
+
+    <div class="tab-content active" id="tab-insights">
+      <div class="empty-state">
+        <h3>Select a document</h3>
+        <p>Pick a document from the sidebar to view its AI-generated insights.</p>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-chat">
+      <div class="empty-state">
+        <h3>Select a completed document to chat</h3>
+        <p>Once a document is processed, you can ask questions about its content.</p>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-compare">
+      <h3 style="margin-bottom:12px;">Compare 2 or more documents</h3>
+      <div class="compare-list" id="compare-list"></div>
+      <button id="compare-btn">Compare Selected</button>
+      <div id="compare-result" style="margin-top:20px;"></div>
+    </div>
+
+    <div class="tab-content" id="tab-metrics">
+      <div id="metrics-content" class="loading">Loading metrics…</div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';  // same origin
+let currentDocId = null;
+let currentSessionId = null;
+let documents = [];
+
+// ---------- Toast ----------
+function toast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ---------- Health ----------
+async function checkHealth() {
+  try {
+    const r = await fetch(API + '/health/ready');
+    const d = await r.json();
+    document.getElementById('health-status').textContent =
+      d.status === 'ready' ? '● ready' : '● degraded';
+  } catch {
+    document.getElementById('health-status').textContent = '● offline';
+  }
+}
+
+// ---------- Documents ----------
+async function loadDocuments() {
+  try {
+    const r = await fetch(API + '/api/v1/documents');
+    const d = await r.json();
+    documents = d.documents;
+    renderDocList();
+    renderCompareList();
+  } catch (e) {
+    toast('Failed to load documents', true);
+  }
+}
+
+function renderDocList() {
+  const list = document.getElementById('doc-list');
+  if (!documents.length) {
+    list.innerHTML = '<div class="empty-state"><p>No documents yet</p></div>';
+    return;
+  }
+  list.innerHTML = documents.map(d => `
+    <div class="doc-item ${d.id === currentDocId ? 'selected' : ''}" data-id="${d.id}">
+      <div class="doc-name">${escapeHtml(d.original_filename)}</div>
+      <div class="doc-meta">
+        <span>v${d.version} • ${formatBytes(d.file_size)}</span>
+        <span class="status-badge status-${d.status}">${d.status}</span>
+      </div>
+    </div>
+  `).join('');
+  list.querySelectorAll('.doc-item').forEach(el => {
+    el.onclick = () => selectDocument(el.dataset.id);
+  });
+}
+
+function selectDocument(id) {
+  currentDocId = id;
+  currentSessionId = null;
+  renderDocList();
+  const activeTab = document.querySelector('.tab.active').dataset.tab;
+  if (activeTab === 'insights') loadInsights();
+  if (activeTab === 'chat') initChat();
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + 'B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + 'KB';
+  return (b / 1048576).toFixed(1) + 'MB';
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s || '';
+  return div.innerHTML;
+}
+
+// ---------- Upload ----------
+const uploadArea = document.getElementById('upload-area');
+const fileInput = document.getElementById('file-input');
+fileInput.onchange = e => uploadFile(e.target.files[0]);
+uploadArea.ondragover = e => { e.preventDefault(); uploadArea.classList.add('dragover'); };
+uploadArea.ondragleave = () => uploadArea.classList.remove('dragover');
+uploadArea.ondrop = e => {
+  e.preventDefault();
+  uploadArea.classList.remove('dragover');
+  uploadFile(e.dataTransfer.files[0]);
+};
+
+const uploadTitle = document.getElementById('upload-title');
+const uploadHint = document.getElementById('upload-hint');
+const DEFAULT_TITLE = 'Upload a document';
+const DEFAULT_HINT = 'Click or drop a file here · PDF, DOCX, TXT · 50\u00a0MB max';
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+async function uploadFile(file) {
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  uploadArea.classList.add('uploading');
+  uploadTitle.textContent = 'Uploading…';
+  uploadHint.textContent = `${file.name} · ${fmtSize(file.size)}`;
+  try {
+    const r = await fetch(API + '/api/v1/documents/upload', { method: 'POST', body: fd });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.detail || 'Upload failed', true);
+      uploadTitle.textContent = 'Upload failed';
+      uploadHint.textContent = err.detail || 'Try again';
+      return;
+    }
+    toast('Uploaded — processing in background');
+    uploadTitle.textContent = 'Uploaded ✓';
+    uploadHint.textContent = `${file.name} is processing…`;
+    fileInput.value = '';
+    await loadDocuments();
+    pollStatuses();
+  } catch (e) {
+    toast('Upload failed: ' + e.message, true);
+    uploadTitle.textContent = 'Upload failed';
+    uploadHint.textContent = e.message;
+  } finally {
+    uploadArea.classList.remove('uploading');
+    setTimeout(() => {
+      uploadTitle.textContent = DEFAULT_TITLE;
+      uploadHint.textContent = DEFAULT_HINT;
+    }, 2500);
+  }
+}
+
+let pollTimer = null;
+function pollStatuses() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    await loadDocuments();
+    const stillProcessing = documents.some(d =>
+      d.status === 'pending' || d.status === 'processing'
+    );
+    if (!stillProcessing) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }, 2000);
+}
+
+// ---------- Insights ----------
+async function loadInsights() {
+  const tab = document.getElementById('tab-insights');
+  if (!currentDocId) {
+    tab.innerHTML = '<div class="empty-state"><h3>Select a document</h3></div>';
+    return;
+  }
+  tab.innerHTML = '<div class="loading"><span class="spinner"></span>Loading insights…</div>';
+  try {
+    const r = await fetch(API + `/api/v1/documents/${currentDocId}/insights`);
+    if (!r.ok) {
+      const doc = documents.find(d => d.id === currentDocId);
+      if (doc && doc.status !== 'completed') {
+        tab.innerHTML = `<div class="empty-state"><h3>Document is ${doc.status}</h3><p>Insights will be available after processing completes.</p></div>`;
+      } else {
+        tab.innerHTML = '<div class="empty-state"><h3>No insights available</h3></div>';
+      }
+      return;
+    }
+    const i = await r.json();
+    renderInsights(i);
+  } catch (e) {
+    tab.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${e.message}</p></div>`;
+  }
+}
+
+function renderInsights(i) {
+  const entities = i.entities || {};
+  const allEntities = [
+    ...(entities.people || []).map(e => ({ type: 'person', name: e })),
+    ...(entities.organizations || []).map(e => ({ type: 'org', name: e })),
+    ...(entities.locations || []).map(e => ({ type: 'location', name: e })),
+    ...(entities.dates || []).map(e => ({ type: 'date', name: e })),
+  ];
+  const html = `
+    <div class="insight-grid">
+      <div class="card">
+        <h3>Summary</h3>
+        <p>${escapeHtml(i.summary)}</p>
+      </div>
+      <div class="card">
+        <h3>Metadata</h3>
+        <div class="meta-row">
+          <span><strong>Category:</strong> ${i.category || '—'}</span>
+          <span><strong>Sentiment:</strong> ${i.sentiment || '—'}</span>
+          <span><strong>Language:</strong> ${i.language || '—'}</span>
+          <span><strong>Confidence:</strong> ${(i.confidence_score * 100).toFixed(0)}%</span>
+          <span><strong>Time:</strong> ${i.processing_time_seconds?.toFixed(1)}s</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Key Topics</h3>
+        <div>${(i.key_topics || []).map(t => `<span class="tag topic">${escapeHtml(t)}</span>`).join('')}</div>
+      </div>
+      <div class="card">
+        <h3>Tags</h3>
+        <div>${(i.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>
+      </div>
+      <div class="card">
+        <h3>Named Entities</h3>
+        <div>${allEntities.map(e => `<span class="tag entity" title="${e.type}">${escapeHtml(e.name)}</span>`).join('') || '<span style="color:#888">None extracted</span>'}</div>
+      </div>
+      <div class="card">
+        <h3>Actions</h3>
+        <button onclick="regenerate()">Regenerate Insights</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('tab-insights').innerHTML = html;
+}
+
+async function regenerate() {
+  if (!currentDocId) return;
+  toast('Regenerating insights…');
+  try {
+    await fetch(API + `/api/v1/documents/${currentDocId}/insights/regenerate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary_length: 'standard' }),
+    });
+    setTimeout(loadInsights, 5000);
+  } catch (e) {
+    toast('Regeneration failed', true);
+  }
+}
+
+// ---------- Chat ----------
+async function initChat() {
+  const tab = document.getElementById('tab-chat');
+  if (!currentDocId) {
+    tab.innerHTML = '<div class="empty-state"><h3>Select a document</h3></div>';
+    tab.classList.remove('chat-active');
+    return;
+  }
+  const doc = documents.find(d => d.id === currentDocId);
+  if (!doc || doc.status !== 'completed') {
+    tab.innerHTML = `<div class="empty-state"><h3>Document is ${doc?.status || 'unknown'}</h3><p>Chat will be available after processing completes.</p></div>`;
+    tab.classList.remove('chat-active');
+    return;
+  }
+  tab.classList.add('chat-active');
+  tab.innerHTML = `
+    <div class="stream-toggle">
+      <input type="checkbox" id="stream-checkbox" checked>
+      <label for="stream-checkbox">Stream responses (SSE)</label>
+    </div>
+    <div class="chat-container">
+      <div class="messages" id="messages"></div>
+      <div class="chat-input">
+        <input type="text" id="chat-input-field" placeholder="Ask a question about this document...">
+        <button id="send-btn">Send</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('send-btn').onclick = sendQuestion;
+  document.getElementById('chat-input-field').onkeydown = e => {
+    if (e.key === 'Enter') sendQuestion();
+  };
+
+  // Create or reuse session
+  try {
+    const r = await fetch(API + '/api/v1/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ document_id: currentDocId }),
+    });
+    const s = await r.json();
+    currentSessionId = s.id;
+  } catch (e) {
+    toast('Failed to create chat session', true);
+  }
+}
+
+function addMessage(role, content, citations = null, followUps = null) {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `message ${role}`;
+  let html = `<div class="content">${escapeHtml(content).replace(/\n/g, '<br>')}</div>`;
+  if (citations && citations.length) {
+    html += `<div class="citations"><h4>Sources</h4>`;
+    citations.forEach(c => {
+      html += `<div class="citation">"${escapeHtml(c.snippet)}"<small>${c.page_number ? 'Page ' + c.page_number : ''} ${c.relevance_score ? '• score: ' + c.relevance_score.toFixed(2) : ''}</small></div>`;
+    });
+    html += `</div>`;
+  }
+  if (followUps && followUps.length) {
+    html += `<div class="followups"><h4>Follow-ups</h4>`;
+    followUps.forEach(f => {
+      html += `<span class="followup-btn" onclick="askFollowUp('${escapeHtml(f).replace(/'/g, '&#39;')}')">${escapeHtml(f)}</span>`;
+    });
+    html += `</div>`;
+  }
+  div.innerHTML = html;
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+  return div;
+}
+
+function askFollowUp(q) {
+  document.getElementById('chat-input-field').value = q;
+  sendQuestion();
+}
+
+async function sendQuestion() {
+  const input = document.getElementById('chat-input-field');
+  const question = input.value.trim();
+  if (!question || !currentSessionId) return;
+  input.value = '';
+  addMessage('user', question);
+
+  const useStream = document.getElementById('stream-checkbox').checked;
+  if (useStream) {
+    await streamAnswer(question);
+  } else {
+    await regularAnswer(question);
+  }
+}
+
+async function regularAnswer(question) {
+  const placeholder = addMessage('assistant', '⏳ Thinking…');
+  try {
+    const r = await fetch(API + `/api/v1/chat/sessions/${currentSessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    if (!r.ok) {
+      placeholder.querySelector('.content').textContent = 'Error: ' + r.statusText;
+      return;
+    }
+    const data = await r.json();
+    placeholder.remove();
+    addMessage('assistant', data.answer.content, data.answer.citations, data.answer.follow_up_suggestions);
+  } catch (e) {
+    placeholder.querySelector('.content').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function streamAnswer(question) {
+  const msg = addMessage('assistant', '');
+  const contentEl = msg.querySelector('.content');
+  let fullText = '';
+  try {
+    const r = await fetch(API + `/api/v1/chat/sessions/${currentSessionId}/messages/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+          if (event.type === 'chunk') {
+            fullText += event.text;
+            contentEl.innerHTML = escapeHtml(fullText).replace(/\n/g, '<br>');
+            document.getElementById('messages').scrollTop = 1e9;
+          } else if (event.type === 'citations') {
+            // Strip JSON code block from displayed text
+            const cleaned = fullText.replace(/```json[\s\S]*?```/g, '').trim();
+            contentEl.innerHTML = escapeHtml(cleaned).replace(/\n/g, '<br>');
+            const citationsHtml = '<div class="citations"><h4>Sources</h4>' +
+              event.citations.map(c => `<div class="citation">"${escapeHtml(c.snippet)}"<small>${c.page_number ? 'Page ' + c.page_number : ''} ${c.relevance_score ? '• score: ' + c.relevance_score.toFixed(2) : ''}</small></div>`).join('') +
+              '</div>';
+            msg.insertAdjacentHTML('beforeend', citationsHtml);
+          } else if (event.type === 'done') {
+            if (event.follow_up_suggestions && event.follow_up_suggestions.length) {
+              const followsHtml = '<div class="followups"><h4>Follow-ups</h4>' +
+                event.follow_up_suggestions.map(f => `<span class="followup-btn" onclick="askFollowUp('${escapeHtml(f).replace(/'/g, '&#39;')}')">${escapeHtml(f)}</span>`).join('') +
+                '</div>';
+              msg.insertAdjacentHTML('beforeend', followsHtml);
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    contentEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ---------- Compare ----------
+function renderCompareList() {
+  const list = document.getElementById('compare-list');
+  const completed = documents.filter(d => d.status === 'completed');
+  if (!completed.length) {
+    list.innerHTML = '<p style="color:#888">No completed documents available for comparison.</p>';
+    return;
+  }
+  list.innerHTML = completed.map(d => `
+    <label class="compare-doc">
+      <input type="checkbox" value="${d.id}">
+      <span>${escapeHtml(d.original_filename)} (v${d.version})</span>
+    </label>
+  `).join('');
+}
+
+document.getElementById('compare-btn').onclick = async () => {
+  const checked = Array.from(document.querySelectorAll('#compare-list input:checked')).map(c => c.value);
+  if (checked.length < 2) {
+    toast('Select at least 2 documents', true);
+    return;
+  }
+  const result = document.getElementById('compare-result');
+  result.innerHTML = '<div class="loading"><span class="spinner"></span>Running comparison…</div>';
+  try {
+    const r = await fetch(API + '/api/v1/documents/compare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ document_ids: checked }),
+    });
+    if (!r.ok) {
+      const err = await r.json();
+      result.innerHTML = `<div class="card"><p style="color:#c41e3a">${err.detail}</p></div>`;
+      return;
+    }
+    const c = await r.json();
+    result.innerHTML = `
+      <div class="insight-grid">
+        <div class="card"><h3>Overview</h3><p>${escapeHtml(c.overview)}</p></div>
+        <div class="card"><h3>Similarities</h3><ul style="padding-left:20px">${c.similarities.map(s => `<li style="margin:4px 0">${escapeHtml(s)}</li>`).join('')}</ul></div>
+        <div class="card"><h3>Differences</h3><ul style="padding-left:20px">${c.differences.map(s => `<li style="margin:4px 0">${escapeHtml(s)}</li>`).join('')}</ul></div>
+        <div class="card"><h3>Unique Insights</h3>${c.unique_insights.map(u => `<p style="margin:6px 0"><strong>${escapeHtml(u.document)}:</strong> ${escapeHtml(u.insight)}</p>`).join('')}</div>
+        <div class="card"><h3>Relationships</h3><p>${escapeHtml(c.relationships)}</p></div>
+      </div>
+    `;
+  } catch (e) {
+    result.innerHTML = `<div class="card"><p style="color:#c41e3a">Error: ${e.message}</p></div>`;
+  }
+};
+
+// ---------- Metrics ----------
+async function loadMetrics() {
+  const el = document.getElementById('metrics-content');
+  el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading…</div>';
+  try {
+    const [docs, proc, chat] = await Promise.all([
+      fetch(API + '/api/v1/metrics/documents').then(r => r.json()),
+      fetch(API + '/api/v1/metrics/processing').then(r => r.json()),
+      fetch(API + '/api/v1/metrics/chat').then(r => r.json()),
+    ]);
+    el.innerHTML = `
+      <div class="insight-grid">
+        <div class="card">
+          <h3>Documents</h3>
+          <pre style="font-size:12px">${JSON.stringify(docs, null, 2)}</pre>
+        </div>
+        <div class="card">
+          <h3>Processing</h3>
+          <pre style="font-size:12px">${JSON.stringify(proc, null, 2)}</pre>
+        </div>
+        <div class="card">
+          <h3>Chat</h3>
+          <pre style="font-size:12px">${JSON.stringify(chat, null, 2)}</pre>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = '<p style="color:#c41e3a">Failed to load metrics</p>';
+  }
+}
+
+// ---------- Tabs ----------
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active', 'chat-active'));
+    tab.classList.add('active');
+    const content = document.getElementById('tab-' + tab.dataset.tab);
+    content.classList.add('active');
+    if (tab.dataset.tab === 'insights') loadInsights();
+    if (tab.dataset.tab === 'chat') initChat();
+    if (tab.dataset.tab === 'metrics') loadMetrics();
+    if (tab.dataset.tab === 'compare') renderCompareList();
+  };
+});
+
+// ---------- Init ----------
+checkHealth();
+loadDocuments();
+setInterval(checkHealth, 30000);
+</script>
+</body>
+</html>
