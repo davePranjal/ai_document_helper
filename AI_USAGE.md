@@ -46,7 +46,7 @@ Detailed breakdown below.
 
 ### 2. RAG Chat (`app/services/chat_service.py` + `app/prompts/chat_qa.py`)
 
-**What it does**: Users ask natural language questions about their documents. The system embeds the question, retrieves the top-5 most similar chunks via pgvector cosine similarity, and sends them as context to Claude along with conversation history.
+**What it does**: Users ask natural language questions about their documents. The system embeds the question, retrieves the top-12 most similar chunks (with ±1 neighbor expansion) via pgvector cosine similarity, and sends them as context to Claude along with conversation history.
 
 **Prompt design decisions**:
 
@@ -108,7 +108,7 @@ Redis is used to cache three types of data:
 | Document insights | 24 hours | Invalidated on regeneration |
 | Metrics aggregations | 60 seconds | Time-based expiry |
 
-Query embedding caching is particularly valuable because the same question asked across different sessions produces identical embeddings — a cache hit saves an OpenAI API call (~100ms + cost).
+Query embedding caching is particularly valuable because the same question asked across different sessions produces identical embeddings — a cache hit saves a model inference (~50ms on CPU).
 
 ## Cost Tracking (`app/services/metrics_service.py`)
 
@@ -134,13 +134,81 @@ Current rate assumptions:
 
 This was chosen over simpler splitting strategies because it respects paragraph and sentence boundaries, producing more semantically coherent chunks. The 200-character overlap ensures that information spanning chunk boundaries isn't lost during retrieval.
 
-LangChain is used *only* for text splitting. All LLM calls and embeddings use the Anthropic and OpenAI SDKs directly, giving full control over prompts, streaming, token counting, and error handling.
+LangChain is used *only* for text splitting. All LLM calls use the Anthropic SDK directly, and embeddings run locally via sentence-transformers — giving full control over prompts, streaming, token counting, and error handling.
 
-## Development Tools
+## Development with AI Coding Tools
 
-This project was built using **Claude Code** (Anthropic's CLI coding assistant) for:
-- Architecture planning and iterative implementation
-- Code generation across all layers (models, services, APIs, tasks, prompts, tests)
-- Debugging async SQLAlchemy / asyncpg issues (BaseHTTPMiddleware conflicts, connection pool leaks)
-- Migration generation and pgvector index configuration
-- Test authoring and failure diagnosis
+This project was built end-to-end using **Claude Code** (Anthropic's CLI coding assistant). Below are representative prompts from the development process, showing how AI was used at each stage — from architecture to debugging to iteration.
+
+### Architecture & Planning
+
+**Prompt:**
+> Design an implementation plan for a "ChatGPT for your documents" backend. Users upload documents, get AI-powered analysis, and chat with documents via RAG. Use FastAPI, PostgreSQL with pgvector, Celery + Redis for async processing, Claude for LLM, and local sentence-transformers for embeddings. Structure the project in phases so each one is independently demo-able.
+
+**What it produced:** A 6-phase plan with exact file paths, database models, endpoint tables, and a dependency graph showing which phases could be parallelized. This became the project's roadmap — every phase maps to a commit in the final repo.
+
+**Why this prompt worked:** Specifying the tech stack upfront prevented the AI from proposing alternatives mid-implementation. Requiring "independently demo-able" phases forced a bottom-up build order where each layer works before the next starts.
+
+### Code Generation — RAG Pipeline
+
+**Prompt:**
+> Implement the RAG chat pipeline in chat_service.py. Steps: embed the user question via embedding_service, run pgvector cosine similarity search filtered to the session's document IDs, format retrieved chunks as numbered passages with page numbers, build conversation history from the last 10 messages, call Claude with a system prompt that requires grounded answers with citations, parse the response to extract a JSON citation block, and store both user and assistant messages. Support multi-document sessions where document_ids is a list.
+
+**What it produced:** The full `chat_service.py` (~350 lines) including `_similarity_search_multi` with raw SQL for pgvector, `_parse_response` with fallback citation generation, and both sync and streaming code paths.
+
+**Why this prompt worked:** Enumerating the pipeline steps in order gave the AI a clear contract for each function. Mentioning "multi-document sessions" early ensured the data model handled `document_ids` from the start rather than retrofitting it later.
+
+### Debugging — SQL Parameter Binding
+
+**Prompt:**
+> The chat similarity search is failing silently — pgvector returns no results even though chunks exist. The raw SQL uses `:embedding::vector` and `:doc_ids::uuid[]` casts. I suspect the `::` syntax conflicts with SQLAlchemy's `:param` named parameter binding under asyncpg.
+
+**What it produced:** Identified the exact conflict (asyncpg treats `::` as part of the parameter name, so `:embedding::vector` becomes a parameter named `embedding::vector` that's never bound). Fix: replace `::type` casts with `CAST(:param AS type)`.
+
+**Why this prompt worked:** Including the specific SQL syntax and the hypothesis ("I suspect") gave the AI enough context to confirm the diagnosis immediately rather than suggesting generic debugging steps.
+
+### Iteration — RAG Quality Improvement
+
+**Prompt:**
+> The RAG chat is returning too many "I don't have enough information" refusals, even for questions that should be answerable from the document. Top-5 chunks at 1000 characters each gives only ~5000 characters of context. For narrative questions about plot or causality, the model needs surrounding context, not just the best-matching paragraph.
+
+**What it produced:** Three changes: (1) increased `TOP_K_CHUNKS` from 5 to 12, (2) added neighbor expansion that pulls ±1 adjacent chunks for each vector hit, and (3) rewrote the hallucination guard from "answer ONLY from context, refuse if insufficient" to "ground every claim in passages, synthesize across non-contiguous excerpts, refuse only when genuinely no evidence exists."
+
+**Why this prompt worked:** Describing the *symptom* (over-refusal), the *root cause* (too little context), and the *domain constraint* (narrative questions need surrounding text) let the AI propose a multi-part fix that addressed retrieval quantity, retrieval quality, and prompt calibration simultaneously.
+
+### Debugging — Celery Worker Crash
+
+**Prompt:**
+> The Celery worker crashes with SIGABRT when processing documents. The log shows it loads the sentence-transformers model on MPS (Metal), then the forked worker process dies. This is on macOS with Apple Silicon.
+
+**What it produced:** Diagnosed the root cause (PyTorch initializes the Metal GPU backend, then Celery's prefork pool calls `fork()`, which is unsafe after Metal init). Two fixes: (1) force `device="cpu"` in `embedding_service.py`, (2) switch Celery to `--pool=threads` which avoids forking entirely.
+
+### Refactoring — Storage Abstraction
+
+**Prompt:**
+> I need to deploy to GCP Cloud Run with Google Cloud Storage instead of the local filesystem. The upload code in document_service.py writes directly to disk, and the Celery worker reads from disk via file_path. Create a storage abstraction so the same code works with local filesystem in dev and GCS in production, switched by an env var. The worker needs real file paths for pdfplumber/python-docx, so GCS files need to be downloaded to a temp file transparently.
+
+**What it produced:** `storage_service.py` with `save_file()`, `delete_file()`, and a `local_path()` context manager that transparently downloads GCS objects to temp files. Updated `document_service.py` and `document_tasks.py` to use the abstraction. Added `STORAGE_BACKEND` and `GCS_BUCKET` to config.
+
+**Why this prompt worked:** Identifying the constraint (pdfplumber needs real paths) upfront prevented the AI from proposing a byte-stream interface that wouldn't work. Specifying "switched by env var" ensured the abstraction was config-driven rather than code-branched.
+
+### Test Isolation Fix
+
+**Prompt:**
+> There are ~165 stale test files in the uploads/ directory and matching rows in the dev database from pytest runs. Fix the test setup so tests use an isolated upload directory and clean up database rows after the session.
+
+**What it produced:** Updated `tests/conftest.py` to set `UPLOAD_DIR` to a `tempfile.mkdtemp()` before app import, added a session-scoped autouse fixture that truncates all document tables and removes the temp directory at teardown.
+
+### Building the UI
+
+**Prompt:**
+> Build a basic single-page UI so I can test all the features from a browser instead of curl. It needs: file upload with drag-and-drop, a document list with status badges, tabs for Insights (summary + metadata cards), Chat (with SSE streaming, citations, follow-up buttons), Compare (multi-select documents), and Metrics. Use vanilla JS/HTML/CSS, no framework.
+
+**What it produced:** A complete 863-line `static/index.html` with all requested features, auto-polling for document status, toast notifications, and a responsive layout.
+
+### Key Takeaways
+
+1. **Specificity beats brevity.** Prompts that named exact files, functions, and constraints produced working code in one shot. Vague prompts required multiple rounds of clarification.
+2. **Include the "why."** Explaining the symptom and hypothesis (not just "fix this bug") let the AI skip generic suggestions and go straight to the right fix.
+3. **Describe constraints upfront.** Mentioning "pdfplumber needs file paths" or "asyncpg conflicts with `::` syntax" in the prompt prevented solutions that would have failed on the first run.
+4. **Iterate on AI output.** The RAG pipeline went through three versions: initial top-5, then full-document dump, then top-12 with neighbor expansion. Each iteration was driven by observing actual failure modes in testing.
